@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/libdns/libdns"
 )
@@ -44,15 +45,13 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns
 	var errs = OpErrors("DeleteRecords")
 	for _, rec := range recs {
 		ar := alidnsRecord(rec, zone)
-		if ar.RecordID == "" {
-			r0, err := p.queryDomainRecord(ctx, ar.Rr, ar.DomainName, ar.DomainType, ar.DomainValue)
-			if err != nil {
-				errs.JoinRecord(rec, err)
-				continue
-			}
-			ar.RecordID = r0.RecordID
+		r0, err := p.queryDomainRecordCombination(ctx, ar.Rr, ar.DomainName, ar.DomainType)
+		if err != nil {
+			errs.JoinRecord(rec, err)
+			continue
 		}
-		_, err := p.delDomainRecord(ctx, ar)
+		ar.RecordID = r0.RecordID
+		_, err = p.delDomainRecord(ctx, ar)
 		if err != nil {
 			errs.JoinRecord(rec, err)
 			continue
@@ -82,19 +81,16 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, recs []libdns.Re
 	var errs = OpErrors("SetRecords")
 	for _, rec := range recs {
 		ar := alidnsRecord(rec, zone)
-		if ar.RecordID == "" {
-			r0, err := p.queryDomainRecord(ctx, ar.Rr, ar.DomainName, ar.DomainType, ar.DomainValue)
+		r0, err := p.queryDomainRecordCombination(ctx, ar.Rr, ar.DomainName, ar.DomainType)
+		if err != nil {
+			ar.RecordID, err = p.addDomainRecord(ctx, ar)
 			if err != nil {
-				ar.RecordID, err = p.addDomainRecord(ctx, ar)
-				if err != nil {
-					errs.JoinRecord(rec, err)
-					continue
-				}
-			} else {
-				ar.RecordID = r0.RecordID
+				errs.JoinRecord(rec, err)
+				continue
 			}
 		} else {
-			_, err := p.setDomainRecord(ctx, ar)
+			ar.RecordID = r0.RecordID
+			_, err = p.setDomainRecord(ctx, ar)
 			if err != nil {
 				errs.JoinRecord(rec, err)
 				continue
@@ -126,7 +122,11 @@ func (p *Provider) addDomainRecord(ctx context.Context, rc aliDomainRecord) (rec
 	p.client.AddRequestBody("RR", rc.Rr)
 	p.client.AddRequestBody("Type", rc.DomainType)
 	p.client.AddRequestBody("Value", rc.DomainValue)
-	p.client.AddRequestBody("TTL", fmt.Sprintf("%d", rc.TTL))
+	// alidns not allowed ttl < 600s
+	if time.Duration(rc.TTL)*time.Second >= 10*time.Minute {
+		p.client.AddRequestBody("TTL", fmt.Sprintf("%d", rc.TTL))
+	}
+	p.client.AddRequestBody("Priority", fmt.Sprintf("%d", rc.Priority))
 	rs := aliDomainResult{}
 	err = p.doAPIRequest(ctx, &rs)
 	recID = rs.RecID
@@ -163,7 +163,11 @@ func (p *Provider) setDomainRecord(ctx context.Context, rc aliDomainRecord) (rec
 	p.client.AddRequestBody("RR", rc.Rr)
 	p.client.AddRequestBody("Type", rc.DomainType)
 	p.client.AddRequestBody("Value", rc.DomainValue)
-	p.client.AddRequestBody("TTL", fmt.Sprintf("%d", rc.TTL))
+	// alidns not allowed ttl < 600s
+	if time.Duration(rc.TTL)*time.Second >= 10*time.Minute {
+		p.client.AddRequestBody("TTL", fmt.Sprintf("%d", rc.TTL))
+	}
+	p.client.AddRequestBody("Priority", fmt.Sprintf("%d", rc.Priority))
 	rs := aliDomainResult{}
 	err = p.doAPIRequest(ctx, &rs)
 	recID = rs.RecID
@@ -216,6 +220,28 @@ func (p *Provider) queryDomainRecord(ctx context.Context, rr, name string, recTy
 		p.client.AddRequestBody("ValueKeyWord", recVal[0])
 	}
 	p.client.AddRequestBody("SearchMode", "ADVANCED")
+	rs := aliDomainResult{}
+	err := p.doAPIRequest(ctx, &rs)
+	if err != nil {
+		return aliDomainRecord{}, err
+	}
+	if len(rs.DomainRecords.Record) == 0 {
+		return aliDomainRecord{}, errors.New("the Record Name of the domain not found")
+	}
+	return rs.DomainRecords.Record[0], err
+}
+
+func (p *Provider) queryDomainRecordCombination(ctx context.Context, rr, name string, recType string) (aliDomainRecord, error) {
+	p.client.Lock()
+	defer p.client.Unlock()
+	p.getClient()
+	p.client.AddRequestBody("Action", "DescribeDomainRecords")
+	p.client.AddRequestBody("DomainName", strings.Trim(name, "."))
+	p.client.AddRequestBody("RRKeyWord", rr)
+	if recType != "" {
+		p.client.AddRequestBody("TypeKeyWord", recType)
+	}
+	p.client.AddRequestBody("SearchMode", "COMBINATION")
 	rs := aliDomainResult{}
 	err := p.doAPIRequest(ctx, &rs)
 	if err != nil {

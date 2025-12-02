@@ -73,11 +73,12 @@ func (c *aliClientSchema) signReq(method string) error {
 
 func (c *aliClientSchema) addReqBody(key string, value string) error {
 	c.mutex.Lock()
-	_, err := c.requestPairs.Append(key, value)
+	values, err := c.requestPairs.Append(key, value)
 	if err != nil {
 		c.mutex.Unlock()
 		return err
 	}
+	c.requestPairs = values
 	c.mutex.Unlock()
 	return nil
 }
