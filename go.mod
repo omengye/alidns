@@ -1,4 +1,4 @@
-module github.com/libdns/alidns
+module github.com/omengye/alidns
 
 go 1.16
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	al "github.com/libdns/alidns"
 	l "github.com/libdns/libdns"
+	al "github.com/omengye/alidns"
 )
 
 func main() {
